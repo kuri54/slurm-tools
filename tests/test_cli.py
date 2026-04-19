@@ -1,0 +1,168 @@
+import io
+import unittest
+from unittest.mock import patch
+
+from sltop import cli
+
+
+class ParseMemToMbTests(unittest.TestCase):
+    def test_parse_mem_to_mb(self) -> None:
+        cases = {
+            "30000M": 30000,
+            "30G": 30720,
+            "1T": 1048576,
+            "": 0,
+            "invalid": 0,
+        }
+        for value, expected in cases.items():
+            with self.subTest(value=value):
+                self.assertEqual(cli.parse_mem_to_mb(value), expected)
+
+
+class ParseReqTresTests(unittest.TestCase):
+    def test_parse_req_tres_with_gres_gpu(self) -> None:
+        raw = "JobId=101 ReqTRES=cpu=25,mem=30G,node=1,billing=25,gres/gpu=2"
+        self.assertEqual(cli.parse_req_tres(raw), (25, 2, 30720))
+
+    def test_parse_req_tres_with_gpu_fallback(self) -> None:
+        raw = "JobId=103 ReqTRES=mem=16G,node=1,cpu=5,gpu=1"
+        self.assertEqual(cli.parse_req_tres(raw), (5, 1, 16384))
+
+    def test_parse_req_tres_missing(self) -> None:
+        raw = "JobId=777 UserId=user1"
+        self.assertEqual(cli.parse_req_tres(raw), (0, 0, 0))
+
+    def test_parse_req_tres_sums_multiple_gpu_types(self) -> None:
+        raw = "ReqTRES=cpu=4,mem=8G,gres/gpu:a100=1,gres/gpu:l40=2"
+        self.assertEqual(cli.parse_req_tres(raw), (4, 3, 8192))
+
+
+class JobsAndAggregateTests(unittest.TestCase):
+    def test_get_jobs_for_node_filters_and_maps_states(self) -> None:
+        output = "\n".join(
+            [
+                "101|user1|RUNNING",
+                "110|user1|PENDING",
+                "oops|user2|RUNNING",
+                "120|user3|COMPLETED",
+                "",
+            ]
+        )
+        with patch("sltop.cli.run_command", return_value=output):
+            jobs = cli.get_jobs_for_node("node-a")
+
+        self.assertEqual(jobs, [(101, "user1", "RUN"), (110, "user1", "PEND")])
+
+    def test_build_user_aggregates(self) -> None:
+        resources = [
+            cli.JobResource(
+                job_id=102, user="user1", state="RUN", cpu=5, gpu=1, mem_mb=4096
+            ),
+            cli.JobResource(
+                job_id=101, user="user1", state="RUN", cpu=20, gpu=1, mem_mb=26624
+            ),
+            cli.JobResource(
+                job_id=110, user="user1", state="PEND", cpu=10, gpu=1, mem_mb=30720
+            ),
+            cli.JobResource(
+                job_id=103, user="user2", state="RUN", cpu=5, gpu=1, mem_mb=16384
+            ),
+        ]
+        aggregates = cli.build_user_aggregates(resources)
+
+        self.assertEqual(set(aggregates.keys()), {"user1", "user2"})
+        self.assertEqual(aggregates["user1"].run.cpu_total, 25)
+        self.assertEqual(aggregates["user1"].run.gpu_total, 2)
+        self.assertEqual(aggregates["user1"].run.mem_mb_total, 30720)
+        self.assertEqual(aggregates["user1"].run.job_ids, [101, 102])
+        self.assertEqual(aggregates["user1"].pend.cpu_total, 10)
+        self.assertEqual(aggregates["user1"].pend.gpu_total, 1)
+        self.assertEqual(aggregates["user1"].pend.mem_mb_total, 30720)
+        self.assertEqual(aggregates["user1"].pend.job_ids, [110])
+
+        self.assertEqual(aggregates["user2"].run.cpu_total, 5)
+        self.assertEqual(aggregates["user2"].run.gpu_total, 1)
+        self.assertEqual(aggregates["user2"].run.mem_mb_total, 16384)
+        self.assertEqual(aggregates["user2"].run.job_ids, [103])
+        self.assertEqual(aggregates["user2"].pend.cpu_total, 0)
+        self.assertEqual(aggregates["user2"].pend.gpu_total, 0)
+        self.assertEqual(aggregates["user2"].pend.mem_mb_total, 0)
+        self.assertEqual(aggregates["user2"].pend.job_ids, [])
+
+    def test_print_users_report(self) -> None:
+        resources = [
+            cli.JobResource(
+                job_id=101, user="user1", state="RUN", cpu=25, gpu=2, mem_mb=30720
+            ),
+            cli.JobResource(
+                job_id=102, user="user1", state="RUN", cpu=0, gpu=0, mem_mb=0
+            ),
+            cli.JobResource(
+                job_id=110, user="user1", state="PEND", cpu=10, gpu=1, mem_mb=30720
+            ),
+            cli.JobResource(
+                job_id=103, user="user2", state="RUN", cpu=5, gpu=1, mem_mb=16384
+            ),
+        ]
+        aggregates = cli.build_user_aggregates(resources)
+
+        stdout = io.StringIO()
+        with patch("sys.stdout", stdout):
+            cli.print_users_report(aggregates)
+
+        output = stdout.getvalue()
+        self.assertIn("USERS :", output)
+        self.assertIn("user1  RUN", output)
+        self.assertIn("jobs: 101,102", output)
+        self.assertIn("PEND cpu 10  gpu 1  mem 30720MB   jobs: 110", output)
+        self.assertIn("user2  RUN", output)
+        self.assertIn("PEND cpu  0  gpu 0  mem     0MB   jobs: -", output)
+
+    def test_get_job_resources_skips_missing_job_error(self) -> None:
+        jobs = [(101, "user1", "RUN"), (110, "user1", "PEND"), (103, "user2", "RUN")]
+
+        with patch("sltop.cli.get_jobs_for_node", return_value=jobs):
+            with patch(
+                "sltop.cli.get_job_resource",
+                side_effect=[
+                    cli.JobResource(
+                        job_id=101,
+                        user="user1",
+                        state="RUN",
+                        cpu=25,
+                        gpu=2,
+                        mem_mb=30720,
+                    ),
+                    RuntimeError(
+                        "failed to run scontrol show job -o 110: "
+                        "slurm_load_jobs error: Invalid job id specified"
+                    ),
+                    cli.JobResource(
+                        job_id=103,
+                        user="user2",
+                        state="RUN",
+                        cpu=5,
+                        gpu=1,
+                        mem_mb=16384,
+                    ),
+                ],
+            ):
+                resources = cli.get_job_resources("node-a")
+
+        self.assertEqual([r.job_id for r in resources], [101, 103])
+
+    def test_get_job_resources_raises_non_missing_error(self) -> None:
+        jobs = [(101, "user1", "RUN")]
+        with patch("sltop.cli.get_jobs_for_node", return_value=jobs):
+            with patch(
+                "sltop.cli.get_job_resource",
+                side_effect=RuntimeError(
+                    "failed to run scontrol show job -o 101: permission denied"
+                ),
+            ):
+                with self.assertRaises(RuntimeError):
+                    cli.get_job_resources("node-a")
+
+
+if __name__ == "__main__":
+    unittest.main()
