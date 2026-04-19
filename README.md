@@ -5,7 +5,8 @@
 ## Purpose
 
 - Check Slurm node status at a glance
-- Combine `scontrol` and `nvidia-smi` output in one view
+- Combine `scontrol`, `squeue`, and `nvidia-smi` output in one view
+- Show per-user resource requests split by `RUN` and `PEND` with job IDs
 - Run directly with `uvx` (no manual install needed)
 
 ## Installation
@@ -53,6 +54,11 @@ GPU   :
   GPU 0 (NVIDIA RTX A6000): mem 18432 / 49140 MB
   GPU 1 (NVIDIA RTX A6000): mem 18390 / 49140 MB
   GPU 2 (NVIDIA RTX A6000): mem 210 / 49140 MB
+USERS :
+  user1  RUN  cpu 25  gpu 2  mem 30720MB   jobs: 101,102
+         PEND cpu 10  gpu 1  mem 30720MB   jobs: 110
+  user2  RUN  cpu  5  gpu 1  mem 16384MB   jobs: 103
+         PEND cpu  0  gpu 0  mem     0MB   jobs: -
 ```
 
 ## How to override the node
