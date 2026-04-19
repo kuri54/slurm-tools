@@ -10,10 +10,22 @@
 
 ## Installation
 
-Run directly with `uvx`:
+One-off run (no permanent install):
 
 ```bash
 uvx --from git+https://github.com/kuri54/slurm-tools.git sltop
+```
+
+Persistent install (recommended if you use it often):
+
+```bash
+uv tool install git+https://github.com/kuri54/slurm-tools.git
+```
+
+After installing, run:
+
+```bash
+sltop
 ```
 
 To test from a local clone:
