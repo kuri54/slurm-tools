@@ -129,19 +129,14 @@ def get_node_info(node: str) -> NodeInfo:
     return parse_node_info(raw, node)
 
 
-def get_jobs_for_node(node: str) -> list[tuple[int, str, str]]:
-    raw = run_command(
-        [
-            "squeue",
-            "-h",
-            "-w",
-            node,
-            "-t",
-            "RUNNING,PENDING",
-            "-o",
-            SQUEUE_FORMAT,
-        ]
-    )
+def get_jobs_for_node(node: str | None, state_filter: str) -> list[tuple[int, str, str]]:
+    cmd = ["squeue", "-h"]
+    if node is not None:
+        cmd.extend(["-w", node])
+    cmd.extend(["-t", state_filter, "-o", SQUEUE_FORMAT])
+
+    raw = run_command(cmd)
+    allowed_states = {state.strip() for state in state_filter.split(",") if state.strip()}
 
     jobs: list[tuple[int, str, str]] = []
     for line in raw.splitlines():
@@ -154,6 +149,8 @@ def get_jobs_for_node(node: str) -> list[tuple[int, str, str]]:
             continue
 
         job_id_raw, user, state_raw = parts
+        if state_raw not in allowed_states:
+            continue
         state = JOB_STATE_MAP.get(state_raw)
         if state is None or not user:
             continue
@@ -349,7 +346,15 @@ def is_missing_job_error(error: RuntimeError) -> bool:
 
 
 def get_job_resources(node: str) -> list[JobResource]:
-    jobs = get_jobs_for_node(node)
+    run_jobs = get_jobs_for_node(node, "RUNNING")
+    run_users = {user for _, user, _ in run_jobs}
+
+    pending_jobs: list[tuple[int, str, str]] = []
+    if run_users:
+        all_pending_jobs = get_jobs_for_node(None, "PENDING")
+        pending_jobs = [job for job in all_pending_jobs if job[1] in run_users]
+
+    jobs = run_jobs + pending_jobs
 
     resources: list[JobResource] = []
     for job_id, user, state in jobs:
