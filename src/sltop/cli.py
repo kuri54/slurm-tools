@@ -201,17 +201,27 @@ def parse_tres_count(value: str) -> int:
     return int(m.group(1))
 
 
-def parse_req_tres(raw: str) -> tuple[int, int, int]:
-    m = re.search(r"\bReqTRES=([^\s]+)", raw)
+def extract_field_value(raw: str, key: str) -> str | None:
+    m = re.search(rf"\b{re.escape(key)}=([^\s]+)", raw)
     if not m:
-        return 0, 0, 0
+        return None
+    return m.group(1)
 
+
+def extract_int_field(raw: str, key: str) -> int | None:
+    value = extract_field_value(raw, key)
+    if value is None:
+        return None
+    return parse_tres_count(value) or None
+
+
+def parse_tres_values(tres_value: str) -> tuple[int, int, int]:
     cpu = 0
     mem_mb = 0
     gpu_from_gres = 0
     gpu_fallback = 0
 
-    for part in m.group(1).split(","):
+    for part in tres_value.split(","):
         if "=" not in part:
             continue
         key, value = part.split("=", 1)
@@ -228,6 +238,69 @@ def parse_req_tres(raw: str) -> tuple[int, int, int]:
             gpu_fallback += parse_tres_count(value)
 
     gpu = gpu_from_gres if gpu_from_gres > 0 else gpu_fallback
+    return cpu, gpu, mem_mb
+
+
+def parse_gpu_colon_spec(value: str) -> int:
+    total = 0
+    for part in value.split(","):
+        item = part.strip()
+        if not item:
+            continue
+
+        # Drop affinity suffixes like "(S:0-1)".
+        item = item.split("(", 1)[0]
+        if item.startswith("gres:"):
+            item = item[5:]
+
+        tokens = item.split(":")
+        if not tokens or tokens[0] != "gpu":
+            continue
+
+        if len(tokens) == 1:
+            total += 1
+            continue
+
+        if len(tokens) == 2:
+            total += int(tokens[1]) if tokens[1].isdigit() else 1
+            continue
+
+        total += int(tokens[-1]) if tokens[-1].isdigit() else 1
+
+    return total
+
+
+def parse_req_tres(raw: str) -> tuple[int, int, int]:
+    cpu = 0
+    gpu = 0
+    mem_mb = 0
+
+    req_tres = extract_field_value(raw, "ReqTRES")
+    if req_tres:
+        cpu, gpu, mem_mb = parse_tres_values(req_tres)
+
+    if gpu == 0:
+        alloc_tres = extract_field_value(raw, "AllocTRES")
+        if alloc_tres:
+            _, gpu, _ = parse_tres_values(alloc_tres)
+
+    if gpu == 0:
+        tres_per_node = extract_field_value(raw, "TresPerNode")
+        if tres_per_node:
+            gpu = parse_gpu_colon_spec(tres_per_node)
+
+    if gpu == 0:
+        gres = extract_field_value(raw, "Gres")
+        if gres:
+            gpu = parse_gpu_colon_spec(gres)
+
+    if gpu == 0:
+        tres_per_task = extract_field_value(raw, "TresPerTask")
+        num_tasks = extract_int_field(raw, "NumTasks")
+        if tres_per_task and num_tasks:
+            gpu_per_task = parse_gpu_colon_spec(tres_per_task)
+            gpu = gpu_per_task * num_tasks
+
     return cpu, gpu, mem_mb
 
 
