@@ -94,10 +94,28 @@ class JobsAndAggregateTests(unittest.TestCase):
                 "",
             ]
         )
-        with patch("sltop.cli.run_command", return_value=output):
-            jobs = cli.get_jobs_for_node("node-a")
+        with patch("sltop.cli.run_command", return_value=output) as mocked_run:
+            jobs = cli.get_jobs_for_node("node-a", "RUNNING")
 
-        self.assertEqual(jobs, [(101, "user1", "RUN"), (110, "user1", "PEND")])
+        self.assertEqual(jobs, [(101, "user1", "RUN")])
+        mocked_run.assert_called_once_with(
+            ["squeue", "-h", "-w", "node-a", "-t", "RUNNING", "-o", "%A|%u|%T"]
+        )
+
+    def test_get_jobs_for_node_without_node_filter(self) -> None:
+        output = "\n".join(
+            [
+                "110|user1|PENDING",
+                "",
+            ]
+        )
+        with patch("sltop.cli.run_command", return_value=output) as mocked_run:
+            jobs = cli.get_jobs_for_node(None, "PENDING")
+
+        self.assertEqual(jobs, [(110, "user1", "PEND")])
+        mocked_run.assert_called_once_with(
+            ["squeue", "-h", "-t", "PENDING", "-o", "%A|%u|%T"]
+        )
 
     def test_build_user_aggregates(self) -> None:
         resources = [
@@ -165,9 +183,13 @@ class JobsAndAggregateTests(unittest.TestCase):
         self.assertIn("PEND cpu  0  gpu 0  mem     0MB   jobs: -", output)
 
     def test_get_job_resources_skips_missing_job_error(self) -> None:
-        jobs = [(101, "user1", "RUN"), (110, "user1", "PEND"), (103, "user2", "RUN")]
+        run_jobs = [(101, "user1", "RUN"), (103, "user2", "RUN")]
+        pending_jobs = [(110, "user1", "PEND"), (999, "user3", "PEND")]
 
-        with patch("sltop.cli.get_jobs_for_node", return_value=jobs):
+        with patch(
+            "sltop.cli.get_jobs_for_node",
+            side_effect=[run_jobs, pending_jobs],
+        ):
             with patch(
                 "sltop.cli.get_job_resource",
                 side_effect=[
@@ -179,10 +201,6 @@ class JobsAndAggregateTests(unittest.TestCase):
                         gpu=2,
                         mem_mb=30720,
                     ),
-                    RuntimeError(
-                        "failed to run scontrol show job -o 110: "
-                        "slurm_load_jobs error: Invalid job id specified"
-                    ),
                     cli.JobResource(
                         job_id=103,
                         user="user2",
@@ -191,6 +209,10 @@ class JobsAndAggregateTests(unittest.TestCase):
                         gpu=1,
                         mem_mb=16384,
                     ),
+                    RuntimeError(
+                        "failed to run scontrol show job -o 110: "
+                        "slurm_load_jobs error: Invalid job id specified"
+                    ),
                 ],
             ):
                 resources = cli.get_job_resources("node-a")
@@ -198,8 +220,11 @@ class JobsAndAggregateTests(unittest.TestCase):
         self.assertEqual([r.job_id for r in resources], [101, 103])
 
     def test_get_job_resources_raises_non_missing_error(self) -> None:
-        jobs = [(101, "user1", "RUN")]
-        with patch("sltop.cli.get_jobs_for_node", return_value=jobs):
+        run_jobs = [(101, "user1", "RUN")]
+        with patch(
+            "sltop.cli.get_jobs_for_node",
+            side_effect=[run_jobs, []],
+        ):
             with patch(
                 "sltop.cli.get_job_resource",
                 side_effect=RuntimeError(
@@ -208,6 +233,39 @@ class JobsAndAggregateTests(unittest.TestCase):
             ):
                 with self.assertRaises(RuntimeError):
                     cli.get_job_resources("node-a")
+
+    def test_get_job_resources_includes_pending_for_run_users(self) -> None:
+        run_jobs = [(31, "kurita", "RUN")]
+        pending_jobs = [(32, "kurita", "PEND"), (40, "other", "PEND")]
+
+        with patch(
+            "sltop.cli.get_jobs_for_node",
+            side_effect=[run_jobs, pending_jobs],
+        ):
+            with patch(
+                "sltop.cli.get_job_resource",
+                side_effect=[
+                    cli.JobResource(
+                        job_id=31,
+                        user="kurita",
+                        state="RUN",
+                        cpu=30,
+                        gpu=2,
+                        mem_mb=30720,
+                    ),
+                    cli.JobResource(
+                        job_id=32,
+                        user="kurita",
+                        state="PEND",
+                        cpu=30,
+                        gpu=2,
+                        mem_mb=30720,
+                    ),
+                ],
+            ):
+                resources = cli.get_job_resources("node-a")
+
+        self.assertEqual([r.job_id for r in resources], [31, 32])
 
 
 if __name__ == "__main__":
