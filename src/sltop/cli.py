@@ -252,6 +252,8 @@ def parse_gpu_colon_spec(value: str) -> int:
         item = item.split("(", 1)[0]
         if item.startswith("gres:"):
             item = item[5:]
+        if item.startswith("gres/"):
+            item = item[5:]
 
         tokens = item.split(":")
         if not tokens or tokens[0] != "gpu":
@@ -285,9 +287,24 @@ def parse_req_tres(raw: str) -> tuple[int, int, int]:
             _, gpu, _ = parse_tres_values(alloc_tres)
 
     if gpu == 0:
+        tres_per_job = extract_field_value(raw, "TresPerJob")
+        if tres_per_job:
+            gpu = parse_gpu_colon_spec(tres_per_job)
+
+    if gpu == 0:
         tres_per_node = extract_field_value(raw, "TresPerNode")
         if tres_per_node:
             gpu = parse_gpu_colon_spec(tres_per_node)
+
+    if gpu == 0:
+        req_gres = extract_field_value(raw, "ReqGRES")
+        if req_gres:
+            gpu = parse_gpu_colon_spec(req_gres)
+
+    if gpu == 0:
+        alloc_gres = extract_field_value(raw, "AllocGRES")
+        if alloc_gres:
+            gpu = parse_gpu_colon_spec(alloc_gres)
 
     if gpu == 0:
         gres = extract_field_value(raw, "Gres")
