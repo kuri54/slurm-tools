@@ -36,6 +36,25 @@ class ParseReqTresTests(unittest.TestCase):
         raw = "ReqTRES=cpu=4,mem=8G,gres/gpu:a100=1,gres/gpu:l40=2"
         self.assertEqual(cli.parse_req_tres(raw), (4, 3, 8192))
 
+    def test_parse_req_tres_falls_back_to_alloctres_for_gpu(self) -> None:
+        raw = (
+            "JobId=200 ReqTRES=cpu=8,mem=30G,node=1,billing=8 "
+            "AllocTRES=cpu=8,mem=30G,node=1,billing=8,gres/gpu=2"
+        )
+        self.assertEqual(cli.parse_req_tres(raw), (8, 2, 30720))
+
+    def test_parse_req_tres_falls_back_to_tres_per_node_for_gpu(self) -> None:
+        raw = "JobId=201 ReqTRES=cpu=4,mem=16G,node=1 TresPerNode=gres:gpu:2"
+        self.assertEqual(cli.parse_req_tres(raw), (4, 2, 16384))
+
+    def test_parse_req_tres_falls_back_to_gres_for_gpu(self) -> None:
+        raw = "JobId=202 ReqTRES=cpu=4,mem=8G,node=1 Gres=gpu:a100:2(S:0-1)"
+        self.assertEqual(cli.parse_req_tres(raw), (4, 2, 8192))
+
+    def test_parse_req_tres_falls_back_to_tres_per_task_for_gpu(self) -> None:
+        raw = "JobId=203 ReqTRES=cpu=4,mem=8G,node=1 TresPerTask=gres:gpu:1 NumTasks=2"
+        self.assertEqual(cli.parse_req_tres(raw), (4, 2, 8192))
+
 
 class JobsAndAggregateTests(unittest.TestCase):
     def test_get_jobs_for_node_filters_and_maps_states(self) -> None:
