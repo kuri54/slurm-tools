@@ -43,9 +43,28 @@ class ParseReqTresTests(unittest.TestCase):
         )
         self.assertEqual(cli.parse_req_tres(raw), (8, 2, 30720))
 
+    def test_parse_req_tres_prefers_reqtres_over_tres_per_job(self) -> None:
+        raw = (
+            "JobId=205 ReqTRES=cpu=8,mem=30G,node=1,gres/gpu=1 "
+            "TresPerJob=gres/gpu:2"
+        )
+        self.assertEqual(cli.parse_req_tres(raw), (8, 1, 30720))
+
+    def test_parse_req_tres_falls_back_to_tres_per_job_for_gpu(self) -> None:
+        raw = "JobId=206 ReqTRES=cpu=30,mem=30G,node=1,billing=30 TresPerJob=gres/gpu:2"
+        self.assertEqual(cli.parse_req_tres(raw), (30, 2, 30720))
+
     def test_parse_req_tres_falls_back_to_tres_per_node_for_gpu(self) -> None:
         raw = "JobId=201 ReqTRES=cpu=4,mem=16G,node=1 TresPerNode=gres:gpu:2"
         self.assertEqual(cli.parse_req_tres(raw), (4, 2, 16384))
+
+    def test_parse_req_tres_falls_back_to_req_gres_for_gpu(self) -> None:
+        raw = "JobId=204 ReqTRES=cpu=4,mem=8G,node=1 ReqGRES=gpu:2"
+        self.assertEqual(cli.parse_req_tres(raw), (4, 2, 8192))
+
+    def test_parse_req_tres_falls_back_to_alloc_gres_for_gpu(self) -> None:
+        raw = "JobId=207 ReqTRES=cpu=4,mem=8G,node=1 AllocGRES=gpu:a100:2"
+        self.assertEqual(cli.parse_req_tres(raw), (4, 2, 8192))
 
     def test_parse_req_tres_falls_back_to_gres_for_gpu(self) -> None:
         raw = "JobId=202 ReqTRES=cpu=4,mem=8G,node=1 Gres=gpu:a100:2(S:0-1)"
@@ -54,6 +73,14 @@ class ParseReqTresTests(unittest.TestCase):
     def test_parse_req_tres_falls_back_to_tres_per_task_for_gpu(self) -> None:
         raw = "JobId=203 ReqTRES=cpu=4,mem=8G,node=1 TresPerTask=gres:gpu:1 NumTasks=2"
         self.assertEqual(cli.parse_req_tres(raw), (4, 2, 8192))
+
+    def test_parse_req_tres_reproduces_real_tres_per_job_case(self) -> None:
+        raw = (
+            "JobId=30 JobState=RUNNING NumTasks=2 ReqTRES=cpu=30,mem=30G,node=1,"
+            "billing=30 AllocTRES=cpu=30,mem=30G,node=1,billing=30 "
+            "TresPerJob=gres/gpu:2 TresPerTask=cpu=15"
+        )
+        self.assertEqual(cli.parse_req_tres(raw), (30, 2, 30720))
 
 
 class JobsAndAggregateTests(unittest.TestCase):
