@@ -153,6 +153,30 @@ class JobsAndAggregateTests(unittest.TestCase):
         self.assertEqual(aggregates["user2"].pend.mem_mb_total, 0)
         self.assertEqual(aggregates["user2"].pend.job_ids, [])
 
+    def test_print_users_report_shows_three_users(self) -> None:
+        resources = [
+            cli.JobResource(
+                job_id=101, user="user1", state="RUN", cpu=25, gpu=2, mem_mb=30720
+            ),
+            cli.JobResource(
+                job_id=103, user="user2", state="RUN", cpu=5, gpu=1, mem_mb=16384
+            ),
+            cli.JobResource(
+                job_id=104, user="user3", state="PEND", cpu=2, gpu=0, mem_mb=4096
+            ),
+        ]
+        aggregates = cli.build_user_aggregates(resources)
+
+        stdout = io.StringIO()
+        with patch("sys.stdout", stdout):
+            cli.print_users_report(aggregates)
+
+        output = stdout.getvalue()
+        self.assertIn("user1  RUN", output)
+        self.assertIn("user2  RUN", output)
+        self.assertIn("user3  RUN", output)
+        self.assertIn("PEND cpu  2  gpu 0  mem  4096MB   jobs: 104", output)
+
     def test_print_users_report(self) -> None:
         resources = [
             cli.JobResource(
@@ -182,7 +206,7 @@ class JobsAndAggregateTests(unittest.TestCase):
         self.assertIn("user2  RUN", output)
         self.assertIn("PEND cpu  0  gpu 0  mem     0MB   jobs: -", output)
 
-    def test_get_job_resources_skips_missing_job_error(self) -> None:
+    def test_get_job_resources_keeps_missing_job_with_unknown_resources(self) -> None:
         run_jobs = [(101, "user1", "RUN"), (103, "user2", "RUN")]
         pending_jobs = [(110, "user1", "PEND"), (999, "user3", "PEND")]
 
@@ -217,7 +241,52 @@ class JobsAndAggregateTests(unittest.TestCase):
             ):
                 resources = cli.get_job_resources("node-a")
 
-        self.assertEqual([r.job_id for r in resources], [101, 103])
+        self.assertEqual([r.job_id for r in resources], [101, 103, 110])
+        self.assertEqual(resources[2].user, "user1")
+        self.assertEqual(resources[2].state, "PEND")
+        self.assertEqual(resources[2].cpu, 0)
+        self.assertEqual(resources[2].gpu, 0)
+        self.assertEqual(resources[2].mem_mb, 0)
+
+    def test_get_job_resources_keeps_third_user_when_job_detail_is_missing(self) -> None:
+        run_jobs = [
+            (101, "user1", "RUN"),
+            (103, "user2", "RUN"),
+            (104, "user3", "RUN"),
+        ]
+
+        with patch("sltop.cli.get_jobs_for_node", side_effect=[run_jobs, []]):
+            with patch(
+                "sltop.cli.get_job_resource",
+                side_effect=[
+                    cli.JobResource(
+                        job_id=101,
+                        user="user1",
+                        state="RUN",
+                        cpu=25,
+                        gpu=2,
+                        mem_mb=30720,
+                    ),
+                    cli.JobResource(
+                        job_id=103,
+                        user="user2",
+                        state="RUN",
+                        cpu=5,
+                        gpu=1,
+                        mem_mb=16384,
+                    ),
+                    RuntimeError(
+                        "failed to run scontrol show job -o 104: "
+                        "slurm_load_jobs error: Invalid job id specified"
+                    ),
+                ],
+            ):
+                resources = cli.get_job_resources("node-a")
+
+        aggregates = cli.build_user_aggregates(resources)
+        self.assertEqual(set(aggregates.keys()), {"user1", "user2", "user3"})
+        self.assertEqual(aggregates["user3"].run.job_ids, [104])
+        self.assertEqual(aggregates["user3"].run.cpu_total, 0)
 
     def test_get_job_resources_raises_non_missing_error(self) -> None:
         run_jobs = [(101, "user1", "RUN")]
