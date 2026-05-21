@@ -362,8 +362,16 @@ def get_job_resources(node: str) -> list[JobResource]:
             resource = get_job_resource(job_id, user, state)
         except RuntimeError as e:
             if is_missing_job_error(e):
-                continue
-            raise
+                resource = JobResource(
+                    job_id=job_id,
+                    user=user,
+                    state=state,
+                    cpu=0,
+                    gpu=0,
+                    mem_mb=0,
+                )
+            else:
+                raise
         resources.append(resource)
 
     return resources
